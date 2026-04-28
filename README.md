@@ -30,7 +30,6 @@ A Retrieval-Augmented Generation (RAG) assistant that answers technical question
 - **Source citations** : Every answer includes links to original documents
 - **Sources panel** : See retrieved chunks with similarity scores and snippets
 - **Rate limit handling** : Clear error messages for Groq free tier limits
-- **Cold start awareness** : Handling of HF Spaces container startup
 
 ---
 
