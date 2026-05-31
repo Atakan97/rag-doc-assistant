@@ -11,6 +11,12 @@ from langchain_core.documents import Document
 from supabase import create_client
 
 from app.config import settings
+from app.infra.metrics import (
+    RAG_EMBEDDING_DURATION_SECONDS,
+    RAG_RETRIEVAL_DURATION_SECONDS,
+    RAG_TOP_SIMILARITY_SCORE,
+    observe_duration,
+)
 from app.rag.embeddings import get_embeddings
 from app.rag.schemas import SourceItem
 
@@ -39,18 +45,20 @@ def retrieve_documents(
 
     # Embed the user question
     embeddings = get_embeddings()
-    query_embedding = embeddings.embed_query(question)
+    with observe_duration(RAG_EMBEDDING_DURATION_SECONDS, collection=collection):
+        query_embedding = embeddings.embed_query(question)
 
     # Call Supabase RPC for similarity search
     client = _get_supabase_client()
-    response = client.rpc(
-        "match_chunks",
-        {
-            "query_embedding": query_embedding,
-            "match_count": k,
-            "p_collection": collection,
-        },
-    ).execute()
+    with observe_duration(RAG_RETRIEVAL_DURATION_SECONDS, collection=collection):
+        response = client.rpc(
+            "match_chunks",
+            {
+                "query_embedding": query_embedding,
+                "match_count": k,
+                "p_collection": collection,
+            },
+        ).execute()
 
     results = response.data or []
     logger.info(f"Retrieved {len(results)} chunks from Supabase")
@@ -58,11 +66,13 @@ def retrieve_documents(
     # Convert results to LangChain Documents and SourceItems
     documents = []
     source_items = []
+    top_similarity = 0.0
 
     for row in results:
         content = row.get("content", "")
         metadata = row.get("metadata", {})
         similarity = row.get("similarity", 0.0)
+        top_similarity = max(top_similarity, similarity)
 
         # Create a LangChain Document for the RAG chain context
         doc = Document(
@@ -87,5 +97,7 @@ def retrieve_documents(
             snippet=snippet,
         )
         source_items.append(source_item)
+
+    RAG_TOP_SIMILARITY_SCORE.labels(collection=collection).set(top_similarity)
 
     return documents, source_items

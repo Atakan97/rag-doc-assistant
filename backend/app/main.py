@@ -10,12 +10,20 @@ Includes CORS middleware, structured logging, and error handling for Groq rate l
 
 import logging
 from contextlib import asynccontextmanager
+from time import perf_counter
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.config import settings
 from app.infra.logging import setup_logging
+from app.infra.metrics import (
+    RAG_ERRORS_TOTAL,
+    RAG_QUERY_DURATION_SECONDS,
+    RAG_QUERY_TOTAL,
+    get_model_label,
+)
 from app.rag.schemas import QueryRequest, QueryResponse, HealthResponse
 from app.rag.chain import run_rag_chain
 from app.rag.embeddings import get_embeddings
@@ -33,7 +41,7 @@ async def lifespan(app: FastAPI):
     Pre-loads the embedding model during startup to avoid cold-start
     delays on the first user query.
     """
-    # Startup: pre-load the embedding model
+    # Startup: pre loading the embedding model
     logger.info("Starting up: pre-loading embedding model...")
     try:
         get_embeddings()
@@ -76,6 +84,14 @@ async def health_check():
     return HealthResponse(ok=True)
 
 
+@app.get("/metrics", include_in_schema=False)
+async def metrics():
+    """
+    Prometheus scrape endpoint for custom backend metrics.
+    """
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
 @app.post("/query", response_model=QueryResponse)
 async def query_documents(request: QueryRequest):
     """
@@ -85,6 +101,12 @@ async def query_documents(request: QueryRequest):
     generates an answer according to related sources, and returns both
     the answer and structured source references.
     """
+    collection = "fastapi"
+    llm_provider = settings.llm_provider.lower()
+    model = get_model_label(llm_provider, settings.groq_model, settings.ollama_model)
+    start = perf_counter()
+    status = "success"
+
     try:
         logger.info(
             f"Query received | "
@@ -94,7 +116,7 @@ async def query_documents(request: QueryRequest):
         # Run the RAG chain to generate an answer
         response = await run_rag_chain(
             question=request.question,
-            collection="fastapi",
+            collection=collection,
             top_k=request.top_k,
         )
 
@@ -102,11 +124,17 @@ async def query_documents(request: QueryRequest):
         return response
 
     except Exception as e:
+        status = "error"
         error_message = str(e).lower()
 
         # Handle Groq rate limit errors
         if "rate_limit" in error_message or "429" in error_message:
             logger.warning(f"Groq rate limit hit: {e}")
+            RAG_ERRORS_TOTAL.labels(
+                error_type="rate_limit",
+                llm_provider=llm_provider,
+                model=model,
+            ).inc()
             raise HTTPException(
                 status_code=429,
                 detail="The AI service is currently rate-limited. Please wait a moment and try again. The free tier allows 30 requests per minute.",
@@ -114,7 +142,25 @@ async def query_documents(request: QueryRequest):
 
         # Handle other errors
         logger.error(f"Error processing query: {e}", exc_info=True)
+        RAG_ERRORS_TOTAL.labels(
+            error_type="backend_error",
+            llm_provider=llm_provider,
+            model=model,
+        ).inc()
         raise HTTPException(
             status_code=500,
             detail="An error occurred while processing your question. Please try again.",
         )
+    finally:
+        RAG_QUERY_TOTAL.labels(
+            collection=collection,
+            llm_provider=llm_provider,
+            model=model,
+            status=status,
+        ).inc()
+        RAG_QUERY_DURATION_SECONDS.labels(
+            collection=collection,
+            llm_provider=llm_provider,
+            model=model,
+            status=status,
+        ).observe(perf_counter() - start)

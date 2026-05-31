@@ -20,6 +20,7 @@ A Retrieval-Augmented Generation (RAG) assistant that answers technical question
 | Embeddings  | BAAI/bge-small-en-v1.5 (384 dim)  | Text embeddings                      |
 | LLM         | Groq (Llama 3.1 8B Instant)       | Fast cloud inference                 |
 | Vector DB   | Supabase Postgres + pgvector      | Similarity search with filtering     |
+| Observability | Prometheus + Grafana           | Metrics, dashboards, local monitoring |
 | Hosting     | Vercel + HF Spaces                | Deployment                           |
 
 ---
@@ -30,6 +31,7 @@ A Retrieval-Augmented Generation (RAG) assistant that answers technical question
 - **Source citations** : Every answer includes links to original documents
 - **Sources panel** : See retrieved chunks with similarity scores and snippets
 - **Rate limit handling** : Clear error messages for Groq free tier limits
+- **Grafana monitoring** : Prometheus metrics and a RAG dashboard for local monitoring
 
 ---
 
@@ -39,6 +41,7 @@ A Retrieval-Augmented Generation (RAG) assistant that answers technical question
 
 - Python 3.11+
 - Node.js 18+
+- Docker Desktop (optional, for Grafana and Prometheus)
 - Supabase project (free tier)
 - Groq API key (free tier)
 
@@ -87,6 +90,48 @@ npm run dev
 ```
 
 Open `http://localhost:3000` in your browser.
+
+---
+
+## Monitoring with Grafana
+
+The backend has Prometheus metrics at `http://localhost:7860/metrics`. A local Grafana and Prometheus stack is included for monitoring of the RAG pipeline.
+
+### Starting the monitoring
+
+Start the backend first:
+
+```bash
+cd backend
+uvicorn app.main:app --reload --port 7860
+```
+
+Then start Prometheus and Grafana:
+
+```bash
+docker compose -f infra/observability/docker-compose.yml up
+```
+
+### Local URLs
+
+| Service    | URL                         | Notes                         |
+|------------|-----------------------------|-------------------------------|
+| Backend    | `http://localhost:7860`     | FastAPI app                   |
+| Metrics    | `http://localhost:7860/metrics` | Prometheus scrape endpoint |
+| Prometheus | `http://localhost:9090`     | Scrapes the backend metrics   |
+| Grafana    | `http://localhost:3001`     | Login with `admin` / `admin`  |
+
+Grafana takes Prometheus as datasource and displays the **RAG Documentation Assistant Overview** dashboard.
+
+### Dashboard metrics
+
+The dashboard focuses on RAG-specific behavior:
+
+- Query rate and success/error counts
+- `/query` latency with p50/p95 views
+- Embedding, Supabase retrieval, and LLM generation latency
+- Latest top similarity score
+- Backend error counts
 
 ---
 

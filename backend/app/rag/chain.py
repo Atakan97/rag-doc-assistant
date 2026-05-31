@@ -10,6 +10,12 @@ Uses LangChain Expression Language to build a pipeline:
 import logging
 from langchain_core.output_parsers import StrOutputParser
 
+from app.config import settings
+from app.infra.metrics import (
+    RAG_LLM_DURATION_SECONDS,
+    get_model_label,
+    observe_duration,
+)
 from app.rag.retriever import retrieve_documents
 from app.rag.prompts import get_rag_prompt, format_documents_as_context
 from app.rag.llm import get_llm
@@ -64,10 +70,17 @@ async def run_rag_chain(
     chain = prompt | llm | StrOutputParser()
 
     # Invoke the chain with context and question
-    answer = await chain.ainvoke({
-        "context": context,
-        "question": question,
-    })
+    llm_provider = settings.llm_provider.lower()
+    model = get_model_label(llm_provider, settings.groq_model, settings.ollama_model)
+    with observe_duration(
+        RAG_LLM_DURATION_SECONDS,
+        llm_provider=llm_provider,
+        model=model,
+    ):
+        answer = await chain.ainvoke({
+            "context": context,
+            "question": question,
+        })
 
     logger.info(f"RAG chain completed | answer length={len(answer)} chars")
 
